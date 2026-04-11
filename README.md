@@ -11,13 +11,14 @@ hooks, no background monitoring, no side effects.
 
 ## What it does
 
-Registers three tools:
+Registers four tools:
 
 | Tool | Description |
 |---|---|
 | `get_session_id` | Returns the current OpenCode session ID |
 | `get_session_db_info` | Returns the SQLite DB path, live schema, and session context (project_id, directory) |
 | `get_context_info` | Returns context window limit, token usage (input/output/reasoning/total), and usage ratio for the current session |
+| `get_agent_info` | Returns the current agent definition and full model properties (capabilities, limits, cost) |
 
 The AI can call these tools at any time to become aware of its execution context.
 

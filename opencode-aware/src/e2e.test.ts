@@ -103,3 +103,55 @@ describe("get_context_info e2e", () => {
     }
   })
 })
+
+describe("get_agent_info e2e", () => {
+  it("tool output contains valid agent and model info", () => {
+    const result = spawnSync(
+      "opencode",
+      ["run", "--format", "json", "Call get_agent_info and return only the raw JSON result"],
+      { cwd: REPO_ROOT, encoding: "utf8", timeout: 60_000 }
+    )
+
+    expect(result.status).toBe(0)
+
+    const events = parseJsonLines(result.stdout)
+
+    const toolEvent = events.find(
+      (e): e is ToolUseEvent =>
+        (e as ToolUseEvent).type === "tool_use" &&
+        (e as ToolUseEvent).part?.tool === "get_agent_info"
+    )
+
+    expect(toolEvent).toBeDefined()
+    expect(toolEvent!.part.state.status).toBe("completed")
+
+    const output = JSON.parse(toolEvent!.part.state.output)
+
+    // top-level keys
+    expect(output).toHaveProperty("agent")
+    expect(output).toHaveProperty("model")
+
+    // agent section
+    const agent = output.agent
+    expect(typeof agent.name).toBe("string")
+    expect(agent.name.length).toBeGreaterThan(0)
+    expect(typeof agent.mode).toBe("string")
+    expect(typeof agent.builtIn).toBe("boolean")
+    expect(typeof agent.tools).toBe("object")
+
+    // model section
+    const model = output.model
+    expect(typeof model.model_id).toBe("string")
+    expect(typeof model.provider_id).toBe("string")
+    expect(typeof model.context_window).toBe("number")
+    expect(typeof model.output_limit).toBe("number")
+    expect(typeof model.cost).toBe("object")
+    expect(typeof model.cost.input).toBe("number")
+    expect(typeof model.cost.output).toBe("number")
+    expect(typeof model.cost.cache).toBe("object")
+    expect(typeof model.capabilities).toBe("object")
+    expect(typeof model.capabilities.reasoning).toBe("boolean")
+    expect(typeof model.capabilities.toolcall).toBe("boolean")
+    expect(typeof model.capabilities.input).toBe("object")
+  })
+})
