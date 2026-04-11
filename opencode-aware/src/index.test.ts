@@ -17,13 +17,38 @@ function makeContext(sessionID: string): ToolContext {
   }
 }
 
-const mockInput = {
-  client: {
-    app: {
-      log: () => Promise.resolve(),
+// Helpers for building mock message responses
+function assistantMsg(
+  sessionID: string,
+  modelID: string,
+  providerID: string,
+  tokens: { input: number; output: number; reasoning: number },
+) {
+  return { info: { role: "assistant", sessionID, modelID, providerID, tokens } }
+}
+
+function userMsg(sessionID: string) {
+  return { info: { role: "user", sessionID } }
+}
+
+function makeMockInput(
+  messages: ReturnType<typeof assistantMsg | typeof userMsg>[] = [],
+  providers: Array<{ id: string; models?: Record<string, { limit?: { context: number; output: number } }> }> = [],
+) {
+  return {
+    client: {
+      app: { log: () => Promise.resolve() },
+      session: {
+        messages: () => Promise.resolve(messages),
+      },
+      config: {
+        providers: () => Promise.resolve({ providers }),
+      },
     },
-  },
-} as any
+  } as any
+}
+
+const mockInput = makeMockInput()
 
 function expectedDbPath(): string {
   const os = platform()
@@ -104,5 +129,103 @@ describe("OpencodeAwarePlugin", () => {
   it("get_session_db_info description contains LIMIT instruction", async () => {
     const hooks = await OpencodeAwarePlugin(mockInput)
     expect(hooks.tool!.get_session_db_info.description).toContain("LIMIT")
+  })
+})
+
+describe("get_context_info tool", () => {
+  it("is registered on the plugin", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    expect(hooks.tool).toHaveProperty("get_context_info")
+  })
+
+  it("returns valid JSON with all expected keys", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    const raw = await hooks.tool!.get_context_info.execute({}, makeContext("ses_abc"))
+    const result = JSON.parse(raw)
+    expect(result).toHaveProperty("session_id")
+    expect(result).toHaveProperty("model_id")
+    expect(result).toHaveProperty("provider_id")
+    expect(result).toHaveProperty("context_window")
+    expect(result).toHaveProperty("output_limit")
+    expect(result).toHaveProperty("tokens")
+    expect(result.tokens).toHaveProperty("input")
+    expect(result.tokens).toHaveProperty("output")
+    expect(result.tokens).toHaveProperty("reasoning")
+    expect(result.tokens).toHaveProperty("used")
+    expect(result).toHaveProperty("usage_ratio")
+    expect(result).toHaveProperty("usage_percent")
+  })
+
+  it("session_id in result matches context", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    const raw = await hooks.tool!.get_context_info.execute({}, makeContext("ses_my-session"))
+    const { session_id } = JSON.parse(raw)
+    expect(session_id).toBe("ses_my-session")
+  })
+
+  it("sums tokens across multiple assistant messages and ignores user messages", async () => {
+    const input = makeMockInput([
+      userMsg("ses_1"),
+      assistantMsg("ses_1", "claude-x", "anthropic", { input: 1000, output: 200, reasoning: 50 }),
+      userMsg("ses_1"),
+      assistantMsg("ses_1", "claude-x", "anthropic", { input: 500, output: 100, reasoning: 10 }),
+    ])
+    const hooks = await OpencodeAwarePlugin(input)
+    const { tokens, model_id, provider_id } = JSON.parse(
+      await hooks.tool!.get_context_info.execute({}, makeContext("ses_1")),
+    )
+    expect(tokens.input).toBe(1500)
+    expect(tokens.output).toBe(300)
+    expect(tokens.reasoning).toBe(60)
+    expect(tokens.used).toBe(1800)
+    expect(model_id).toBe("claude-x")
+    expect(provider_id).toBe("anthropic")
+  })
+
+  it("computes usage_ratio and usage_percent correctly", async () => {
+    const input = makeMockInput(
+      [assistantMsg("ses_2", "claude-x", "anthropic", { input: 10000, output: 2000, reasoning: 0 })],
+      [{ id: "anthropic", models: { "claude-x": { limit: { context: 200000, output: 8192 } } } }],
+    )
+    const hooks = await OpencodeAwarePlugin(input)
+    const { tokens, context_window, output_limit, usage_ratio, usage_percent } = JSON.parse(
+      await hooks.tool!.get_context_info.execute({}, makeContext("ses_2")),
+    )
+    expect(tokens.used).toBe(12000)
+    expect(context_window).toBe(200000)
+    expect(output_limit).toBe(8192)
+    expect(usage_ratio).toBeCloseTo(0.06, 5)
+    expect(usage_percent).toBe("6.0%")
+  })
+
+  it("returns usage_ratio null and usage_percent null when context_window is 0 (model not found)", async () => {
+    const input = makeMockInput(
+      [assistantMsg("ses_3", "unknown-model", "unknown-provider", { input: 500, output: 100, reasoning: 0 })],
+      [], // no providers
+    )
+    const hooks = await OpencodeAwarePlugin(input)
+    const { context_window, usage_ratio, usage_percent } = JSON.parse(
+      await hooks.tool!.get_context_info.execute({}, makeContext("ses_3")),
+    )
+    expect(context_window).toBe(0)
+    expect(usage_ratio).toBeNull()
+    expect(usage_percent).toBeNull()
+  })
+
+  it("returns zeros and nulls for a session with no assistant messages", async () => {
+    const input = makeMockInput([userMsg("ses_4")])
+    const hooks = await OpencodeAwarePlugin(input)
+    const result = JSON.parse(await hooks.tool!.get_context_info.execute({}, makeContext("ses_4")))
+    expect(result.tokens.input).toBe(0)
+    expect(result.tokens.output).toBe(0)
+    expect(result.tokens.reasoning).toBe(0)
+    expect(result.tokens.used).toBe(0)
+    expect(result.usage_ratio).toBeNull()
+    expect(result.usage_percent).toBeNull()
+  })
+
+  it("description does not mention LIMIT (not a DB query tool)", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    expect(hooks.tool!.get_context_info.description).not.toContain("LIMIT")
   })
 })

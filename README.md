@@ -1,24 +1,25 @@
 # opencode-aware
 
-An OpenCode plugin that gives the AI a tool to query its own session ID.
+An OpenCode plugin that gives the AI tools to query its own session context.
 
 ## Why
 
 For an AI agent to reason about its own execution context, it needs to know which
-session it is operating in. This plugin registers a single `get_session_id` tool
-that returns the current OpenCode session ID on demand — no hooks, no background
-monitoring, no side effects.
+session it is operating in, what history exists, and how much context window it has
+consumed. This plugin registers lightweight tools for session self-awareness — no
+hooks, no background monitoring, no side effects.
 
 ## What it does
 
-Registers one tool: `get_session_id`
+Registers three tools:
 
 | Tool | Description |
 |---|---|
 | `get_session_id` | Returns the current OpenCode session ID |
+| `get_session_db_info` | Returns the SQLite DB path, live schema, and session context (project_id, directory) |
+| `get_context_info` | Returns context window limit, token usage (input/output/reasoning/total), and usage ratio for the current session |
 
-The AI can call this tool at any time to become aware of which session it is running
-in. This is the minimal, correct foundation for session self-awareness.
+The AI can call these tools at any time to become aware of its execution context.
 
 ## Getting started
 

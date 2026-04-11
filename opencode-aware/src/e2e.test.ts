@@ -52,3 +52,54 @@ describe("get_session_id e2e", () => {
     expect(toolEvent!.part.state.output).toBe(sessionID)
   })
 })
+
+describe("get_context_info e2e", () => {
+  it("tool output contains valid context info JSON with expected fields", () => {
+    const result = spawnSync(
+      "opencode",
+      ["run", "--format", "json", "Call get_context_info and return only the raw JSON result"],
+      { cwd: REPO_ROOT, encoding: "utf8", timeout: 60_000 }
+    )
+
+    expect(result.status).toBe(0)
+
+    const events = parseJsonLines(result.stdout)
+
+    const toolEvent = events.find(
+      (e): e is ToolUseEvent =>
+        (e as ToolUseEvent).type === "tool_use" &&
+        (e as ToolUseEvent).part?.tool === "get_context_info"
+    )
+
+    expect(toolEvent).toBeDefined()
+    expect(toolEvent!.part.state.status).toBe("completed")
+
+    const output = JSON.parse(toolEvent!.part.state.output)
+
+    // session_id must match the session all events carry
+    expect(output.session_id).toBe(toolEvent!.sessionID)
+    expect(output.session_id).toMatch(/^ses_/)
+
+    // structural checks
+    expect(typeof output.model_id).toBe("string")
+    expect(typeof output.provider_id).toBe("string")
+    expect(typeof output.context_window).toBe("number")
+    expect(typeof output.output_limit).toBe("number")
+
+    // token fields must be non-negative numbers
+    expect(output.tokens.input).toBeGreaterThanOrEqual(0)
+    expect(output.tokens.output).toBeGreaterThanOrEqual(0)
+    expect(output.tokens.reasoning).toBeGreaterThanOrEqual(0)
+    expect(output.tokens.used).toBe(output.tokens.input + output.tokens.output)
+
+    // usage_ratio and usage_percent are either both null (model not in providers) or both present
+    if (output.usage_ratio !== null) {
+      expect(typeof output.usage_ratio).toBe("number")
+      expect(output.usage_ratio).toBeGreaterThanOrEqual(0)
+      expect(typeof output.usage_percent).toBe("string")
+      expect(output.usage_percent).toMatch(/^\d+\.\d%$/)
+    } else {
+      expect(output.usage_percent).toBeNull()
+    }
+  })
+})
