@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.json"
+  // Local OpenCode config for opencode-aware workspace
+  // Plugin is loaded automatically from .opencode/plugins/
+}
