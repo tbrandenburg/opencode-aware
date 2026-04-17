@@ -2,7 +2,7 @@
 
 An OpenCode plugin that gives the AI tools to query its own session context.
 
-<img align="center" width="640" alt="image" src="https://github.com/user-attachments/assets/b915476e-d59a-41de-afb0-2bd4863d8e4b" />
+<img align="center" width="800" alt="image" src="https://github.com/user-attachments/assets/b915476e-d59a-41de-afb0-2bd4863d8e4b" />
 
 ## Why
 
