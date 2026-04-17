@@ -2,6 +2,8 @@
 
 An OpenCode plugin that gives the AI tools to query its own session context.
 
+<img width="2728" height="2158" alt="image" src="https://github.com/user-attachments/assets/b915476e-d59a-41de-afb0-2bd4863d8e4b" />
+
 ## Why
 
 For an AI agent to reason about its own execution context, it needs to know which
