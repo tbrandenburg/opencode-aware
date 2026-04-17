@@ -56,10 +56,10 @@ const mockInput = makeMockInput()
 
 function expectedDbPath(): string {
   const os = platform()
-  if (os === "darwin") return join(homedir(), "Library", "Application Support", "opencode", "opencode.db")
   if (os === "win32") {
     return join(process.env["APPDATA"] ?? join(homedir(), "AppData", "Roaming"), "opencode", "opencode.db")
   }
+  // macOS and Linux both use XDG conventions
   const xdg = process.env["XDG_DATA_HOME"] ?? join(homedir(), ".local", "share")
   return join(xdg, "opencode", "opencode.db")
 }
