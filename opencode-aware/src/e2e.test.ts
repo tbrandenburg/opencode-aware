@@ -155,3 +155,40 @@ describe("get_agent_info e2e", () => {
     expect(typeof model.capabilities.input).toBe("object")
   })
 })
+
+describe("get_all_agents e2e", () => {
+  it("tool output contains a non-empty array of agents with expected fields", () => {
+    const result = spawnSync(
+      "opencode",
+      ["run", "--format", "json", "Call get_all_agents and return only the raw JSON result"],
+      { cwd: REPO_ROOT, encoding: "utf8", timeout: 60_000 }
+    )
+
+    expect(result.status).toBe(0)
+
+    const events = parseJsonLines(result.stdout)
+
+    const toolEvent = events.find(
+      (e): e is ToolUseEvent =>
+        (e as ToolUseEvent).type === "tool_use" &&
+        (e as ToolUseEvent).part?.tool === "get_all_agents"
+    )
+
+    expect(toolEvent).toBeDefined()
+    expect(toolEvent!.part.state.status).toBe("completed")
+
+    const output = JSON.parse(toolEvent!.part.state.output)
+
+    expect(Array.isArray(output)).toBe(true)
+    expect(output.length).toBeGreaterThan(0)
+
+    for (const agent of output) {
+      expect(typeof agent.name).toBe("string")
+      expect(agent.name.length).toBeGreaterThan(0)
+      expect(typeof agent.mode).toBe("string")
+      expect(typeof agent.builtIn).toBe("boolean")
+      expect(typeof agent.tools).toBe("object")
+      expect(typeof agent.permission).toBe("object")
+    }
+  })
+})

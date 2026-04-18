@@ -472,3 +472,106 @@ describe("get_agent_info tool", () => {
     expect(model.capabilities.input.audio).toBe(false)
   })
 })
+
+describe("get_all_agents tool", () => {
+  const agentA: MockAgent = {
+    name: "build",
+    mode: "primary",
+    builtIn: true,
+    description: "Default build agent",
+    tools: { bash: true, read: true },
+    temperature: 1,
+    topP: 1,
+    maxSteps: 20,
+  }
+
+  const agentB: MockAgent = {
+    name: "review",
+    mode: "secondary",
+    builtIn: false,
+    description: "Code review agent",
+    model: { modelID: "gpt-4o", providerID: "openai" },
+  }
+
+  it("is registered on the plugin", async () => {
+    const hooks = await OpencodeAwarePlugin(makeMockInput())
+    expect(hooks.tool).toHaveProperty("get_all_agents")
+  })
+
+  it("returns valid JSON array", async () => {
+    const input = makeMockInput([], [], [agentA, agentB])
+    const hooks = await OpencodeAwarePlugin(input)
+    const raw = await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x"))
+    const result = JSON.parse(raw)
+    expect(Array.isArray(result)).toBe(true)
+  })
+
+  it("returns all agents", async () => {
+    const input = makeMockInput([], [], [agentA, agentB])
+    const hooks = await OpencodeAwarePlugin(input)
+    const result = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
+    expect(result).toHaveLength(2)
+    expect(result.map((a: { name: string }) => a.name)).toEqual(["build", "review"])
+  })
+
+  it("each agent entry contains all expected keys", async () => {
+    const input = makeMockInput([], [], [agentA])
+    const hooks = await OpencodeAwarePlugin(input)
+    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
+    expect(agent).toHaveProperty("name")
+    expect(agent).toHaveProperty("mode")
+    expect(agent).toHaveProperty("builtIn")
+    expect(agent).toHaveProperty("description")
+    expect(agent).toHaveProperty("prompt")
+    expect(agent).toHaveProperty("temperature")
+    expect(agent).toHaveProperty("topP")
+    expect(agent).toHaveProperty("maxSteps")
+    expect(agent).toHaveProperty("tools")
+    expect(agent).toHaveProperty("permission")
+    expect(agent).toHaveProperty("model")
+  })
+
+  it("maps agent fields correctly", async () => {
+    const input = makeMockInput([], [], [agentA])
+    const hooks = await OpencodeAwarePlugin(input)
+    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
+    expect(agent.name).toBe("build")
+    expect(agent.mode).toBe("primary")
+    expect(agent.builtIn).toBe(true)
+    expect(agent.description).toBe("Default build agent")
+    expect(agent.temperature).toBe(1)
+    expect(agent.topP).toBe(1)
+    expect(agent.maxSteps).toBe(20)
+    expect(agent.tools).toEqual({ bash: true, read: true })
+    expect(agent.model).toBeNull()
+  })
+
+  it("includes model when agent has a pinned model", async () => {
+    const input = makeMockInput([], [], [agentB])
+    const hooks = await OpencodeAwarePlugin(input)
+    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
+    expect(agent.model).toEqual({ modelID: "gpt-4o", providerID: "openai" })
+  })
+
+  it("returns empty array when no agents are configured", async () => {
+    const input = makeMockInput([], [], [])
+    const hooks = await OpencodeAwarePlugin(input)
+    const result = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
+    expect(result).toEqual([])
+  })
+
+  it("defaults optional fields to null or empty objects when missing", async () => {
+    const minimal: MockAgent = { name: "minimal", mode: "primary", builtIn: false }
+    const input = makeMockInput([], [], [minimal])
+    const hooks = await OpencodeAwarePlugin(input)
+    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
+    expect(agent.description).toBeNull()
+    expect(agent.prompt).toBeNull()
+    expect(agent.temperature).toBeNull()
+    expect(agent.topP).toBeNull()
+    expect(agent.maxSteps).toBeNull()
+    expect(agent.tools).toEqual({})
+    expect(agent.permission).toEqual({})
+    expect(agent.model).toBeNull()
+  })
+})

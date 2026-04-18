@@ -282,12 +282,51 @@ export const OpencodeAwarePlugin: Plugin = async (input) => {
     },
   })
 
+  const getAllAgentsTool = tool({
+    description:
+      "Returns all configured agents with their definitions and properties. Use this to see every available agent, their modes, descriptions, tools, and permissions.",
+    args: {},
+    async execute(_args, _context) {
+      const agentsResp = await client.app.agents()
+      const agents: Array<{
+        name: string
+        description?: string
+        mode: string
+        builtIn: boolean
+        model?: { modelID: string; providerID: string }
+        prompt?: string
+        temperature?: number
+        topP?: number
+        maxSteps?: number
+        tools?: Record<string, boolean>
+        permission?: Record<string, unknown>
+      }> = (agentsResp as any)?.data ?? (agentsResp as any) ?? []
+
+      return JSON.stringify(
+        agents.map((a) => ({
+          name: a.name,
+          mode: a.mode,
+          builtIn: a.builtIn,
+          description: a.description ?? null,
+          prompt: a.prompt ?? null,
+          temperature: a.temperature ?? null,
+          topP: a.topP ?? null,
+          maxSteps: a.maxSteps ?? null,
+          tools: a.tools ?? {},
+          permission: a.permission ?? {},
+          model: a.model ?? null,
+        })),
+      )
+    },
+  })
+
   return {
     tool: {
       get_session_id: getSessionIdTool,
       get_session_db_info: getSessionDbInfoTool,
       get_context_info: getContextInfoTool,
       get_agent_info: getAgentInfoTool,
+      get_all_agents: getAllAgentsTool,
     },
   }
 }
