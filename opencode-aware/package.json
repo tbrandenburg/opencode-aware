@@ -1,6 +1,6 @@
 {
   "name": "opencode-aware",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OpenCode plugin that registers a get_session_id tool for AI self-awareness",
   "keywords": [
     "opencode",
