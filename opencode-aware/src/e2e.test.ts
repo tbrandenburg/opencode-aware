@@ -192,3 +192,40 @@ describe("get_all_agents e2e", () => {
     }
   })
 })
+
+describe("get_opencode_docs e2e", () => {
+  it("tool output contains markdown doc links and the sitemap reference URL", () => {
+    const result = spawnSync(
+      "opencode",
+      ["run", "--format", "json", "Call get_opencode_docs and return only the result"],
+      { cwd: REPO_ROOT, encoding: "utf8", timeout: 60_000 }
+    )
+
+    expect(result.status).toBe(0)
+
+    const events = parseJsonLines(result.stdout)
+
+    const toolEvent = events.find(
+      (e): e is ToolUseEvent =>
+        (e as ToolUseEvent).type === "tool_use" &&
+        (e as ToolUseEvent).part?.tool === "get_opencode_docs"
+    )
+
+    expect(toolEvent).toBeDefined()
+    expect(toolEvent!.part.state.status).toBe("completed")
+
+    const output = toolEvent!.part.state.output
+
+    expect(typeof output).toBe("string")
+    expect(output.length).toBeGreaterThan(0)
+
+    // must reference the live sitemap for freshness
+    expect(output).toContain("https://opencode.ai/sitemap.xml")
+
+    // must contain markdown links to key doc pages
+    expect(output).toContain("[Intro](https://opencode.ai/docs/)")
+    expect(output).toContain("[Config](https://opencode.ai/docs/config)")
+    expect(output).toContain("[MCP Servers](https://opencode.ai/docs/mcp-servers)")
+    expect(output).toContain("[Agent Skills](https://opencode.ai/docs/skills)")
+  })
+})

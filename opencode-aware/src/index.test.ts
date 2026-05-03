@@ -575,3 +575,45 @@ describe("get_all_agents tool", () => {
     expect(agent.model).toBeNull()
   })
 })
+
+describe("get_opencode_docs tool", () => {
+  it("is registered on the plugin", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    expect(hooks.tool).toHaveProperty("get_opencode_docs")
+  })
+
+  it("returns a non-empty string", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    const result = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_x"))
+    expect(typeof result).toBe("string")
+    expect((result as string).length).toBeGreaterThan(0)
+  })
+
+  it("output contains the sitemap source URL", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    const result = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_x")) as string
+    expect(result).toContain("https://opencode.ai/sitemap.xml")
+  })
+
+  it("output contains markdown links to core doc pages", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    const result = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_x")) as string
+    expect(result).toContain("[Intro](https://opencode.ai/docs/)")
+    expect(result).toContain("[Config](https://opencode.ai/docs/config)")
+    expect(result).toContain("[MCP Servers](https://opencode.ai/docs/mcp-servers)")
+    expect(result).toContain("[Agent Skills](https://opencode.ai/docs/skills)")
+    expect(result).toContain("[Plugins](https://opencode.ai/docs/plugins)")
+  })
+
+  it("description mentions sitemap URL as freshness reference", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    expect(hooks.tool!.get_opencode_docs.description).toContain("https://opencode.ai/sitemap.xml")
+  })
+
+  it("execute takes no args and ignores context", async () => {
+    const hooks = await OpencodeAwarePlugin(mockInput)
+    const r1 = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_aaa"))
+    const r2 = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_bbb"))
+    expect(r1).toBe(r2)
+  })
+})

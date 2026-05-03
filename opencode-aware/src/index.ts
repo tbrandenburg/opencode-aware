@@ -98,6 +98,53 @@ export function lookupModel(
   return undefined
 }
 
+// ─── OpenCode docs sitemap ────────────────────────────────────────────────────
+
+/**
+ * Static markdown link list of all English OpenCode documentation pages.
+ * Sourced from https://opencode.ai/sitemap.xml (English /docs/* paths only).
+ * For a fully up-to-date list, fetch https://opencode.ai/sitemap.xml and filter
+ * paths that start with /docs/ and have no locale segment (e.g. /docs/zh-cn/).
+ */
+const OPENCODE_DOCS_SITEMAP = `# OpenCode Documentation
+> Sitemap source (always fresh): https://opencode.ai/sitemap.xml
+
+- [Intro](https://opencode.ai/docs/)
+- [Config](https://opencode.ai/docs/config)
+- [Providers](https://opencode.ai/docs/providers)
+- [Network](https://opencode.ai/docs/network)
+- [Enterprise](https://opencode.ai/docs/enterprise)
+- [Troubleshooting](https://opencode.ai/docs/troubleshooting)
+- [Windows / WSL](https://opencode.ai/docs/windows-wsl)
+- [Go](https://opencode.ai/docs/go)
+- [TUI](https://opencode.ai/docs/tui)
+- [CLI](https://opencode.ai/docs/cli)
+- [Web](https://opencode.ai/docs/web)
+- [IDE](https://opencode.ai/docs/ide)
+- [Zen](https://opencode.ai/docs/zen)
+- [Share](https://opencode.ai/docs/share)
+- [GitHub](https://opencode.ai/docs/github)
+- [GitLab](https://opencode.ai/docs/gitlab)
+- [Tools](https://opencode.ai/docs/tools)
+- [Rules](https://opencode.ai/docs/rules)
+- [Agents](https://opencode.ai/docs/agents)
+- [Models](https://opencode.ai/docs/models)
+- [Themes](https://opencode.ai/docs/themes)
+- [Keybinds](https://opencode.ai/docs/keybinds)
+- [Commands](https://opencode.ai/docs/commands)
+- [Formatters](https://opencode.ai/docs/formatters)
+- [Permissions](https://opencode.ai/docs/permissions)
+- [LSP Servers](https://opencode.ai/docs/lsp)
+- [MCP Servers](https://opencode.ai/docs/mcp-servers)
+- [ACP Support](https://opencode.ai/docs/acp)
+- [Agent Skills](https://opencode.ai/docs/skills)
+- [Custom Tools](https://opencode.ai/docs/custom-tools)
+- [SDK](https://opencode.ai/docs/sdk)
+- [Server](https://opencode.ai/docs/server)
+- [Plugins](https://opencode.ai/docs/plugins)
+- [Ecosystem](https://opencode.ai/docs/ecosystem)
+`
+
 // ─── Static tools (no client needed) ─────────────────────────────────────────
 
 const getSessionDbInfoTool = tool({
@@ -127,6 +174,20 @@ const getSessionIdTool = tool({
   args: {},
   async execute(_args, context) {
     return context.sessionID
+  },
+})
+
+const getOpencodeDocsTool = tool({
+  description: [
+    "Returns a markdown list of all OpenCode documentation pages.",
+    "Use this first when asked about any OpenCode feature, config, or usage —",
+    "then fetch the relevant URL with WebFetch for full details.",
+    "For a fully up-to-date list, fetch https://opencode.ai/sitemap.xml",
+    "and filter paths starting with /docs/ that have no locale prefix (e.g. skip /docs/zh-cn/).",
+  ].join(" "),
+  args: {},
+  async execute() {
+    return OPENCODE_DOCS_SITEMAP
   },
 })
 
@@ -327,6 +388,7 @@ export const OpencodeAwarePlugin: Plugin = async (input) => {
       get_context_info: getContextInfoTool,
       get_agent_info: getAgentInfoTool,
       get_all_agents: getAllAgentsTool,
+      get_opencode_docs: getOpencodeDocsTool,
     },
   }
 }
