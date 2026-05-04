@@ -603,6 +603,7 @@ describe("get_opencode_docs tool", () => {
     expect(result).toContain("[MCP Servers](https://opencode.ai/docs/mcp-servers)")
     expect(result).toContain("[Agent Skills](https://opencode.ai/docs/skills)")
     expect(result).toContain("[Plugins](https://opencode.ai/docs/plugins)")
+    expect(result).toContain("[GitHub: anomalyco/opencode](https://github.com/anomalyco/opencode)")
   })
 
   it("description mentions sitemap URL as freshness reference", async () => {

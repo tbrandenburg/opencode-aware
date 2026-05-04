@@ -143,6 +143,9 @@ const OPENCODE_DOCS_SITEMAP = `# OpenCode Documentation
 - [Server](https://opencode.ai/docs/server)
 - [Plugins](https://opencode.ai/docs/plugins)
 - [Ecosystem](https://opencode.ai/docs/ecosystem)
+
+## Source Code
+- [GitHub: anomalyco/opencode](https://github.com/anomalyco/opencode)
 `
 
 // ─── Static tools (no client needed) ─────────────────────────────────────────
