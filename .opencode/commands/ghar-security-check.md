@@ -12,11 +12,11 @@ Analyze this repository's dependencies for security vulnerabilities using packag
 
 1. **Run Package Manager Security Tools** (Only use pre-installed tools on ubuntu-latest):
    - For Node.js: `npm audit` (npm is pre-installed)
-   - For Python: `pip check` (pip is pre-installed)
+   - For Python: First check if the project uses Python by looking for `requirements.txt`, `pyproject.toml`, `setup.py`, `setup.cfg`, or `Pipfile`. Only if one of these exists, run `pip check` (pip is pre-installed). Skip Python checks entirely if none are found.
    - For Go: `go list -json -m all` then check for known vulnerabilities (go is pre-installed)
    
 2. **Additional Tools** (Only if project files indicate they're needed AND can be quickly installed):
-   - For Python: Try `pip install pip-audit --quiet` then `pip-audit` if pip-audit not available
+   - For Python: Only if a Python project file was found in step 1, try `pip install pip-audit --quiet` then `pip-audit` if pip-audit not available
    - For Rust: Only suggest `cargo audit` if Cargo.toml exists (don't install Rust)
    - For Java: Only suggest security checks if pom.xml/build.gradle exists (don't install Java tools)
    - For .NET: Only suggest if .csproj exists (don't install dotnet)
