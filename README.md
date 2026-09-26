@@ -1,6 +1,6 @@
 # opencode-aware
 
-An OpenCode plugin that gives the AI tools to query its own session context.
+An OpenCode v2 plugin that gives the AI tools to query its own session context.
 
 <img align="center" width="800" alt="image" src="https://github.com/user-attachments/assets/b915476e-d59a-41de-afb0-2bd4863d8e4b" />
 
@@ -13,34 +13,42 @@ hooks, no background monitoring, no side effects.
 
 ## What it does
 
-Registers four tools:
+Registers six tools:
 
 | Tool | Description |
 |---|---|
 | `get_session_id` | Returns the current OpenCode session ID |
 | `get_session_db_info` | Returns the SQLite DB path, live schema, and session context (project_id, directory) |
-| `get_context_info` | Returns context window limit, token usage (input/output/reasoning/total), and usage ratio for the current session |
-| `get_agent_info` | Returns the current agent definition and full model properties (capabilities, limits, cost) |
+| `get_context_info` | Returns active context usage after the last compaction, model limits, and token totals |
+| `get_agent_info` | Returns the current agent definition and full model properties (capabilities, limits, cost, options) |
+| `get_all_agents` | Returns agents enumerated by OpenCode v2 (which may omit configured agents) |
+| `get_opencode_docs` | Returns links to key OpenCode v2 documentation pages |
 
 The AI can call these tools at any time to become aware of its execution context.
 
 ## Getting started
 
-Register the plugin in your project's or global `opencode.json`:
+For OpenCode v2, register and pin the plugin in your project's or global `opencode.json`:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-aware@0.3.0"] // Pin the last release compatible with OpenCode v1
+  "plugins": ["opencode-aware@0.4.0"]
 }
 ```
 
-Version `0.3.0` is the last release compatible with OpenCode v1. Pin this version
-if you are using OpenCode v1; future releases may target the incompatible v2
-plugin API. OpenCode v2 uses the `plugins` configuration key and requires a
-version of this plugin built for v2.
+OpenCode v1 uses the incompatible v1 plugin API and the singular `plugin` key.
+Version `0.3.0` is the last release compatible with v1; keep it pinned if you
+remain on v1:
 
-More information: https://opencode.ai/docs/plugins/
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-aware@0.3.0"]
+}
+```
+
+More information: https://opencode.ai/v2/docs/build/plugins
 
 ## Development
 

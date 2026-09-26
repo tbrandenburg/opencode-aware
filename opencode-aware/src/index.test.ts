@@ -1,620 +1,268 @@
-import { describe, it, expect } from "bun:test"
-import { homedir, platform } from "os"
+import { afterEach, describe, expect, it } from "bun:test"
+import { Database } from "bun:sqlite"
+import type { Context } from "@opencode/plugin/promise/plugin"
+import type { ToolContext } from "@opencode/plugin/promise/tool"
+import type { AgentInfo, ModelInfo, SessionInfo, SessionMessageInfo } from "@opencode/client"
+import { mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import { join } from "path"
-import type { ToolContext } from "@opencode-ai/plugin"
-import { OpencodeAwarePlugin, resolveActiveModel, lookupModel } from "./index.js"
+import { createTools, lookupModel, OpencodeAwarePlugin, resolveActiveModel } from "./index.js"
+import { resolveDbPath } from "./db.js"
 
-function makeContext(sessionID: string): ToolContext {
+const temporaryDirectories: string[] = []
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
+})
+
+function makeDatabase(schema: string): string {
+  const directory = mkdtempSync(join(tmpdir(), "opencode-aware-v2-"))
+  temporaryDirectories.push(directory)
+  const path = join(directory, "opencode.db")
+  const db = new Database(path)
+  db.exec(schema)
+  db.close()
+  return path
+}
+
+const model = {
+  id: "model-a",
+  modelID: "model-a",
+  providerID: "provider-a",
+  name: "Model A",
+  settings: { reasoning: true, temperature: 0.2, apiKey: "fixture-key" },
+  capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+  variants: [],
+  time: { released: 0 },
+  cost: [{ input: 2, output: 8, cache: { read: 0.2, write: 2 } }],
+  status: "active",
+  enabled: true,
+  limit: { context: 100_000, output: 4_096 },
+} as unknown as ModelInfo
+
+const agent = {
+  id: "build",
+  name: "Build",
+  mode: "primary",
+  description: "Build agent",
+  system: "Build carefully",
+  request: { settings: {}, headers: { authorization: "fixture-auth" }, body: { temperature: 0.2, top_p: 0.8 } },
+  model: { id: "model-a", providerID: "provider-a" },
+  permissions: [{ action: "edit", resource: "*", effect: "allow" }],
+  hidden: false,
+  steps: 12,
+} as unknown as AgentInfo
+
+function assistantMessage(input: number, output: number, reasoning: number): SessionMessageInfo {
   return {
-    sessionID,
-    messageID: "msg-1",
+    id: "msg-a",
+    type: "assistant",
     agent: "build",
-    directory: "/tmp",
-    worktree: "/tmp",
-    abort: new AbortController().signal,
-    metadata: () => {},
-    ask: async () => {},
+    model: { id: "model-a", providerID: "provider-a" },
+    content: [],
+    tokens: { input, output, reasoning, cache: { read: 0, write: 0 } },
+    time: { created: 1 },
+  } as SessionMessageInfo
+}
+
+const session = {
+  id: "ses_test",
+  projectID: "project-a",
+  location: { directory: "/workspace/project" },
+} as SessionInfo
+
+function makeContext(messages: SessionMessageInfo[] = [assistantMessage(100, 20, 5)]): Context {
+  const data = new Map<string, unknown>()
+  const context = {
+    session: {
+      get: async () => session,
+      context: async () => messages,
+    },
+    agent: {
+      get: async () => ({ location: {}, data: agent }),
+      list: async () => ({ location: {}, data: [agent] }),
+    },
+    model: { list: async () => ({ location: {}, data: [model] }) },
+    storage: {
+      get: async (key: string) => data.get(key),
+      set: async (key: string, value: unknown) => void data.set(key, value),
+      remove: async (key: string) => void data.delete(key),
+      scan: async () => ({ entries: [] }),
+    },
   }
+  return context as unknown as Context
 }
 
-// Helpers for building mock message responses
-function assistantMsg(
-  sessionID: string,
-  modelID: string,
-  providerID: string,
-  tokens: { input: number; output: number; reasoning: number },
-) {
-  return { info: { role: "assistant", sessionID, modelID, providerID, tokens } }
-}
-
-function userMsg(sessionID: string) {
-  return { info: { role: "user", sessionID } }
-}
-
-type MockProvider = { id: string; models?: Record<string, { limit?: { context: number; output: number }; cost?: { input: number; output: number; cache: { read: number; write: number } }; capabilities?: { reasoning: boolean; attachment: boolean; toolcall: boolean; input: { text: boolean; audio: boolean; image: boolean; video: boolean; pdf: boolean } }; name?: string; status?: string }> }
-type MockAgent = { name: string; mode: string; builtIn: boolean; description?: string; model?: { modelID: string; providerID: string }; tools?: Record<string, boolean>; prompt?: string; temperature?: number; topP?: number; maxSteps?: number; permission?: Record<string, unknown> }
-
-function makeMockInput(
-  messages: ReturnType<typeof assistantMsg | typeof userMsg>[] = [],
-  providers: MockProvider[] = [],
-  agents: MockAgent[] = [],
-) {
+function toolContext(): ToolContext {
   return {
-    client: {
-      app: { log: () => Promise.resolve(), agents: () => Promise.resolve(agents) },
-      session: {
-        messages: () => Promise.resolve(messages),
-      },
-      config: {
-        providers: () => Promise.resolve({ providers }),
-      },
-    },
-  } as any
+    sessionID: "ses_test",
+    agent: "build",
+    messageID: "msg_test",
+    id: "call_test",
+    signal: new AbortController().signal,
+    progress: async () => {},
+  } as unknown as ToolContext
 }
 
-const mockInput = makeMockInput()
-
-function expectedDbPath(): string {
-  const os = platform()
-  if (os === "win32") {
-    return join(process.env["APPDATA"] ?? join(homedir(), "AppData", "Roaming"), "opencode", "opencode.db")
+function textContent(result: { content?: string | readonly unknown[] }): string {
+  if (typeof result.content === "string") return result.content
+  if (Array.isArray(result.content)) {
+    return result.content
+      .flatMap((item) => {
+        if (typeof item !== "object" || item === null || !("type" in item) || !("text" in item)) return []
+        return typeof item.text === "string" ? [item.text] : []
+      })
+      .join("\n")
   }
-  // macOS and Linux both use XDG conventions
-  const xdg = process.env["XDG_DATA_HOME"] ?? join(homedir(), ".local", "share")
-  return join(xdg, "opencode", "opencode.db")
+  return ""
 }
 
-describe("OpencodeAwarePlugin", () => {
-  it("registers get_session_id tool", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks).toHaveProperty("tool")
-    expect(hooks.tool).toHaveProperty("get_session_id")
-  })
+async function execute(name: string, ctx = makeContext(), dbPath?: string) {
+  const definitions = createTools(ctx, () => dbPath ?? "")
+  const definition = definitions.find((tool) => tool.name === name)
+  if (!definition) throw new Error(`Tool ${name} was not registered`)
+  return definition.execute({}, toolContext())
+}
 
-  it("get_session_id returns the sessionID from context", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const result = await hooks.tool!.get_session_id.execute({}, makeContext("test-session-123"))
-    expect(result).toBe("test-session-123")
-  })
-
-  it("get_session_id returns different sessionID for different context", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const result = await hooks.tool!.get_session_id.execute({}, makeContext("other-session-456"))
-    expect(result).toBe("other-session-456")
-  })
-
-  it("registers get_session_db_info tool", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks.tool).toHaveProperty("get_session_db_info")
-  })
-
-  it("get_session_db_info returns valid JSON with all expected keys", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const raw = await hooks.tool!.get_session_db_info.execute({}, makeContext("any-session"))
-    const result = JSON.parse(raw)
-    expect(result).toHaveProperty("db_path")
-    expect(result).toHaveProperty("schema")
-    expect(result).toHaveProperty("session_id")
-    expect(result).toHaveProperty("project_id")
-    expect(result).toHaveProperty("directory")
-    expect(typeof result.db_path).toBe("string")
-    expect(typeof result.schema).toBe("string")
-    expect(typeof result.session_id).toBe("string")
-    expect(typeof result.project_id).toBe("string")
-    expect(typeof result.directory).toBe("string")
-  })
-
-  it("get_session_db_info db_path points to opencode.db on current platform", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const raw = await hooks.tool!.get_session_db_info.execute({}, makeContext("any-session"))
-    const { db_path } = JSON.parse(raw)
-    expect(db_path).toBe(expectedDbPath())
-    expect(db_path).toEndWith("opencode.db")
-  })
-
-  it("get_session_db_info schema contains live CREATE TABLE statements for key tables", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const raw = await hooks.tool!.get_session_db_info.execute({}, makeContext("any-session"))
-    const { schema } = JSON.parse(raw)
-    expect(schema).toContain("CREATE TABLE")
-    expect(schema).toContain("`session`")
-    expect(schema).toContain("`message`")
-    expect(schema).toContain("`part`")
-    expect(schema).toContain("`project`")
-  })
-
-  it("get_session_db_info session_id matches context", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const raw = await hooks.tool!.get_session_db_info.execute({}, makeContext("ses_test-123"))
-    const { session_id } = JSON.parse(raw)
-    expect(session_id).toBe("ses_test-123")
-  })
-
-  it("get_session_db_info description contains LIMIT instruction", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks.tool!.get_session_db_info.description).toContain("LIMIT")
-  })
-})
-
-describe("get_context_info tool", () => {
-  it("is registered on the plugin", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks.tool).toHaveProperty("get_context_info")
-  })
-
-  it("returns valid JSON with all expected keys", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const raw = await hooks.tool!.get_context_info.execute({}, makeContext("ses_abc"))
-    const result = JSON.parse(raw)
-    expect(result).toHaveProperty("session_id")
-    expect(result).toHaveProperty("model_id")
-    expect(result).toHaveProperty("provider_id")
-    expect(result).toHaveProperty("context_window")
-    expect(result).toHaveProperty("output_limit")
-    expect(result).toHaveProperty("tokens")
-    expect(result.tokens).toHaveProperty("input")
-    expect(result.tokens).toHaveProperty("output")
-    expect(result.tokens).toHaveProperty("reasoning")
-    expect(result.tokens).toHaveProperty("used")
-    expect(result).toHaveProperty("usage_ratio")
-    expect(result).toHaveProperty("usage_percent")
-  })
-
-  it("session_id in result matches context", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const raw = await hooks.tool!.get_context_info.execute({}, makeContext("ses_my-session"))
-    const { session_id } = JSON.parse(raw)
-    expect(session_id).toBe("ses_my-session")
-  })
-
-  it("sums tokens across multiple assistant messages and ignores user messages", async () => {
-    const input = makeMockInput([
-      userMsg("ses_1"),
-      assistantMsg("ses_1", "claude-x", "anthropic", { input: 1000, output: 200, reasoning: 50 }),
-      userMsg("ses_1"),
-      assistantMsg("ses_1", "claude-x", "anthropic", { input: 500, output: 100, reasoning: 10 }),
+describe("v2 plugin tools", () => {
+  it("registers all six expected tool names", () => {
+    expect(createTools(makeContext(), () => "").map((tool) => tool.name)).toEqual([
+      "get_session_id",
+      "get_session_db_info",
+      "get_context_info",
+      "get_agent_info",
+      "get_all_agents",
+      "get_opencode_docs",
     ])
-    const hooks = await OpencodeAwarePlugin(input)
-    const { tokens, model_id, provider_id } = JSON.parse(
-      await hooks.tool!.get_context_info.execute({}, makeContext("ses_1")),
-    )
-    expect(tokens.input).toBe(1500)
-    expect(tokens.output).toBe(300)
-    expect(tokens.reasoning).toBe(60)
-    expect(tokens.used).toBe(1800)
-    expect(model_id).toBe("claude-x")
-    expect(provider_id).toBe("anthropic")
   })
 
-  it("computes usage_ratio and usage_percent correctly", async () => {
-    const input = makeMockInput(
-      [assistantMsg("ses_2", "claude-x", "anthropic", { input: 10000, output: 2000, reasoning: 0 })],
-      [{ id: "anthropic", models: { "claude-x": { limit: { context: 200000, output: 8192 } } } }],
-    )
-    const hooks = await OpencodeAwarePlugin(input)
-    const { tokens, context_window, output_limit, usage_ratio, usage_percent } = JSON.parse(
-      await hooks.tool!.get_context_info.execute({}, makeContext("ses_2")),
-    )
-    expect(tokens.used).toBe(12000)
-    expect(context_window).toBe(200000)
-    expect(output_limit).toBe(8192)
-    expect(usage_ratio).toBeCloseTo(0.06, 5)
-    expect(usage_percent).toBe("6.0%")
-  })
-
-  it("returns usage_ratio null and usage_percent null when context_window is 0 (model not found)", async () => {
-    const input = makeMockInput(
-      [assistantMsg("ses_3", "unknown-model", "unknown-provider", { input: 500, output: 100, reasoning: 0 })],
-      [], // no providers
-    )
-    const hooks = await OpencodeAwarePlugin(input)
-    const { context_window, usage_ratio, usage_percent } = JSON.parse(
-      await hooks.tool!.get_context_info.execute({}, makeContext("ses_3")),
-    )
-    expect(context_window).toBe(0)
-    expect(usage_ratio).toBeNull()
-    expect(usage_percent).toBeNull()
-  })
-
-  it("returns zeros and nulls for a session with no assistant messages", async () => {
-    const input = makeMockInput([userMsg("ses_4")])
-    const hooks = await OpencodeAwarePlugin(input)
-    const result = JSON.parse(await hooks.tool!.get_context_info.execute({}, makeContext("ses_4")))
-    expect(result.tokens.input).toBe(0)
-    expect(result.tokens.output).toBe(0)
-    expect(result.tokens.reasoning).toBe(0)
-    expect(result.tokens.used).toBe(0)
-    expect(result.usage_ratio).toBeNull()
-    expect(result.usage_percent).toBeNull()
-  })
-
-  it("description does not mention LIMIT (not a DB query tool)", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks.tool!.get_context_info.description).not.toContain("LIMIT")
-  })
-})
-
-describe("resolveActiveModel (helper)", () => {
-  it("returns empty strings when no messages", () => {
-    const result = resolveActiveModel([])
-    expect(result.modelID).toBe("")
-    expect(result.providerID).toBe("")
-  })
-
-  it("returns empty strings when only user messages exist", () => {
-    const msgs = [{ info: { role: "user" } }]
-    const result = resolveActiveModel(msgs)
-    expect(result.modelID).toBe("")
-    expect(result.providerID).toBe("")
-  })
-
-  it("picks modelID and providerID from the last assistant message", () => {
-    const msgs = [
-      { info: { role: "assistant", modelID: "claude-a", providerID: "anthropic" } },
-      { info: { role: "user" } },
-      { info: { role: "assistant", modelID: "claude-b", providerID: "anthropic2" } },
-    ]
-    const result = resolveActiveModel(msgs)
-    expect(result.modelID).toBe("claude-b")
-    expect(result.providerID).toBe("anthropic2")
-  })
-
-  it("keeps previous value if last assistant message has no modelID", () => {
-    const msgs = [
-      { info: { role: "assistant", modelID: "claude-a", providerID: "anthropic" } },
-      { info: { role: "assistant" } }, // no modelID / providerID
-    ]
-    const result = resolveActiveModel(msgs)
-    expect(result.modelID).toBe("claude-a")
-    expect(result.providerID).toBe("anthropic")
-  })
-})
-
-describe("lookupModel (helper)", () => {
-  const providers = [
-    {
-      id: "anthropic",
-      models: {
-        "claude-sonnet": { name: "Claude Sonnet", status: "available", limit: { context: 200000, output: 8192 } },
-      },
-    },
-    { id: "openai", models: { "gpt-4o": { name: "GPT-4o", status: "available" } } },
-  ]
-
-  it("returns the model when provider and model exist", () => {
-    const model = lookupModel(providers as any, "anthropic", "claude-sonnet")
-    expect(model).toBeDefined()
-    expect(model!.name).toBe("Claude Sonnet")
-  })
-
-  it("returns undefined for unknown provider", () => {
-    expect(lookupModel(providers as any, "unknown", "claude-sonnet")).toBeUndefined()
-  })
-
-  it("returns undefined for unknown model within known provider", () => {
-    expect(lookupModel(providers as any, "anthropic", "gpt-4o")).toBeUndefined()
-  })
-
-  it("returns undefined for empty providers list", () => {
-    expect(lookupModel([], "anthropic", "claude-sonnet")).toBeUndefined()
-  })
-})
-
-describe("get_agent_info tool", () => {
-  const fullProvider: MockProvider = {
-    id: "anthropic",
-    models: {
-      "claude-sonnet": {
-        name: "Claude Sonnet",
-        status: "available",
-        limit: { context: 200000, output: 8192 },
-        cost: { input: 3, output: 15, cache: { read: 0.3, write: 3.75 } },
-        capabilities: {
-          reasoning: false,
-          attachment: true,
-          toolcall: true,
-          input: { text: true, audio: false, image: true, video: false, pdf: true },
+  it("registers each tool through the v2 transform API", async () => {
+    const registered: string[] = []
+    const context = {
+      ...makeContext(),
+      tool: {
+        transform: async (register: (editor: { add: (tool: { name: string }) => void }) => void) => {
+          register({ add: (tool) => registered.push(tool.name) })
+          return { dispose: async () => {} }
         },
       },
-    },
-  }
-
-  const buildAgent: MockAgent = {
-    name: "build",
-    mode: "build",
-    builtIn: true,
-    description: "Build agent",
-    tools: { bash: true, read: true },
-    temperature: 1,
-    topP: 1,
-    maxSteps: 20,
-  }
-
-  it("is registered on the plugin", async () => {
-    const hooks = await OpencodeAwarePlugin(makeMockInput())
-    expect(hooks.tool).toHaveProperty("get_agent_info")
-  })
-
-  it("returns valid JSON with agent and model top-level keys", async () => {
-    const input = makeMockInput([], [], [buildAgent])
-    const hooks = await OpencodeAwarePlugin(input)
-    const raw = await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x"))
-    const result = JSON.parse(raw)
-    expect(result).toHaveProperty("agent")
-    expect(result).toHaveProperty("model")
-  })
-
-  it("agent section contains all expected keys", async () => {
-    const input = makeMockInput([], [], [buildAgent])
-    const hooks = await OpencodeAwarePlugin(input)
-    const { agent } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x")))
-    expect(agent).toHaveProperty("name")
-    expect(agent).toHaveProperty("mode")
-    expect(agent).toHaveProperty("builtIn")
-    expect(agent).toHaveProperty("description")
-    expect(agent).toHaveProperty("prompt")
-    expect(agent).toHaveProperty("temperature")
-    expect(agent).toHaveProperty("topP")
-    expect(agent).toHaveProperty("maxSteps")
-    expect(agent).toHaveProperty("tools")
-    expect(agent).toHaveProperty("permission")
-  })
-
-  it("model section contains all expected keys", async () => {
-    const input = makeMockInput(
-      [assistantMsg("ses_x", "claude-sonnet", "anthropic", { input: 100, output: 20, reasoning: 0 })],
-      [fullProvider],
-      [buildAgent],
-    )
-    const hooks = await OpencodeAwarePlugin(input)
-    const { model } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x")))
-    expect(model).toHaveProperty("model_id")
-    expect(model).toHaveProperty("provider_id")
-    expect(model).toHaveProperty("name")
-    expect(model).toHaveProperty("status")
-    expect(model).toHaveProperty("context_window")
-    expect(model).toHaveProperty("output_limit")
-    expect(model).toHaveProperty("cost")
-    expect(model.cost).toHaveProperty("input")
-    expect(model.cost).toHaveProperty("output")
-    expect(model.cost).toHaveProperty("cache")
-    expect(model.cost.cache).toHaveProperty("read")
-    expect(model.cost.cache).toHaveProperty("write")
-    expect(model).toHaveProperty("capabilities")
-    expect(model.capabilities).toHaveProperty("reasoning")
-    expect(model.capabilities).toHaveProperty("attachment")
-    expect(model.capabilities).toHaveProperty("toolcall")
-    expect(model.capabilities).toHaveProperty("input")
-  })
-
-  it("agent name matches context.agent", async () => {
-    const input = makeMockInput([], [], [buildAgent])
-    const hooks = await OpencodeAwarePlugin(input)
-    const ctx = { ...makeContext("ses_x"), agent: "build" }
-    const { agent } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, ctx))
-    expect(agent.name).toBe("build")
-  })
-
-  it("resolves model via pinned agent model (no message fallback needed)", async () => {
-    const pinnedAgent: MockAgent = {
-      name: "build",
-      mode: "build",
-      builtIn: true,
-      model: { modelID: "claude-sonnet", providerID: "anthropic" },
     }
-    const input = makeMockInput([], [fullProvider], [pinnedAgent])
-    const hooks = await OpencodeAwarePlugin(input)
-    const { model } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x")))
-    expect(model.model_id).toBe("claude-sonnet")
-    expect(model.provider_id).toBe("anthropic")
-    expect(model.context_window).toBe(200000)
-    expect(model.output_limit).toBe(8192)
+    await OpencodeAwarePlugin.setup(context as unknown as Context)
+    expect(registered).toEqual(createTools(makeContext(), () => "").map((tool) => tool.name))
   })
 
-  it("falls back to last AssistantMessage model when agent has no pinned model", async () => {
-    const input = makeMockInput(
-      [assistantMsg("ses_x", "claude-sonnet", "anthropic", { input: 500, output: 100, reasoning: 0 })],
-      [fullProvider],
-      [buildAgent], // buildAgent has no .model pin
+  it("returns the active session ID as tool content", async () => {
+    expect(await execute("get_session_id")).toEqual({ content: "ses_test" })
+  })
+
+  it("returns active context usage and current model limits", async () => {
+    const result = await execute("get_context_info")
+    const value = JSON.parse(textContent(result))
+    expect(value.session_id).toBe("ses_test")
+    expect(value.model_id).toBe("model-a")
+    expect(value.provider_id).toBe("provider-a")
+    expect(value.context_window).toBe(100_000)
+    expect(value.output_limit).toBe(4_096)
+    expect(value.tokens).toEqual({ input: 100, output: 20, reasoning: 5, used: 120 })
+    expect(value.usage_ratio).toBeCloseTo(0.0012)
+    expect(value.usage_percent).toBe("0.1%")
+  })
+
+  it("reports null usage ratio when the active model is unavailable", async () => {
+    const context = makeContext([assistantMessage(10, 2, 0)])
+    const missingModelContext = {
+      ...context,
+      model: { list: async () => ({ location: {}, data: [] }) },
+    } as unknown as Context
+    const value = JSON.parse(textContent(await execute("get_context_info", missingModelContext)))
+    expect(value.context_window).toBe(0)
+    expect(value.usage_ratio).toBeNull()
+    expect(value.usage_percent).toBeNull()
+  })
+
+  it("returns v2 agent and model properties", async () => {
+    const value = JSON.parse(textContent(await execute("get_agent_info")))
+    expect(value.agent.name).toBe("Build")
+    expect(value.agent.prompt).toBe("Build carefully")
+    expect(value.agent.maxSteps).toBe(12)
+    expect(value.agent.builtIn).toBeNull()
+    expect(value.agent.tools).toBeNull()
+    expect(value.agent.permission).toHaveLength(1)
+    expect(value.agent.request.headers.authorization).toBe("[redacted]")
+    expect(value.model.options).toEqual({ reasoning: true, temperature: 0.2, apiKey: "[redacted]" })
+    expect(value.model.cost).toEqual({ input: 2, output: 8, cache: { read: 0.2, write: 2 } })
+    expect(value.model.cost_tiers).toHaveLength(1)
+    expect(value.model.capabilities.toolcall).toBe(true)
+    expect(value.model.capabilities.input.image).toBe(true)
+  })
+
+  it("lists all agents returned by the v2 agent API", async () => {
+    const value = JSON.parse(textContent(await execute("get_all_agents")))
+    expect(value).toHaveLength(1)
+    expect(value[0].id).toBe("build")
+    expect(value[0].permissions).toBeUndefined()
+    expect(value[0].permission).toHaveLength(1)
+  })
+
+  it("returns OpenCode v2 documentation links", async () => {
+    const result = await execute("get_opencode_docs")
+    expect(textContent(result)).toContain("https://opencode.ai/v2/docs/build/plugins")
+    expect(textContent(result)).toContain("https://opencode.ai/v2/docs/migrate-v1")
+  })
+
+  it("reads the v2 session schema and metadata read-only", async () => {
+    const path = makeDatabase(`
+      CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT);
+      CREATE TABLE session_message (id TEXT, session_id TEXT, seq INTEGER, data TEXT);
+      INSERT INTO session_v2 VALUES ('ses_test', 'project-a', '/workspace/project');
+    `)
+    const value = JSON.parse(textContent(await execute("get_session_db_info", makeContext(), path)))
+    expect(value.db_path).toBe(path)
+    expect(value.session_id).toBe("ses_test")
+    expect(value.project_id).toBe("project-a")
+    expect(value.directory).toBe("/workspace/project")
+    expect(value.schema).toContain("session_message")
+  })
+
+  it("fails explicitly for a v1 or unknown database schema", async () => {
+    const path = makeDatabase("CREATE TABLE session (id TEXT PRIMARY KEY);")
+    await expect(execute("get_session_db_info", makeContext(), path)).rejects.toThrow(
+      "Unsupported OpenCode database schema: missing session_v2 table",
     )
-    const hooks = await OpencodeAwarePlugin(input)
-    const { model } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x")))
-    expect(model.model_id).toBe("claude-sonnet")
-    expect(model.provider_id).toBe("anthropic")
   })
 
-  it("returns zero costs and false capabilities when model is not in providers", async () => {
-    const input = makeMockInput(
-      [assistantMsg("ses_x", "unknown-model", "unknown-provider", { input: 100, output: 10, reasoning: 0 })],
-      [], // no providers
-      [buildAgent],
+  it("rejects v2 databases missing their session message table", async () => {
+    const path = makeDatabase("CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT);")
+    await expect(execute("get_session_db_info", makeContext(), path)).rejects.toThrow(
+      "Unsupported OpenCode database schema: missing session_message table",
     )
-    const hooks = await OpencodeAwarePlugin(input)
-    const { model } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x")))
-    expect(model.context_window).toBe(0)
-    expect(model.output_limit).toBe(0)
-    expect(model.cost.input).toBe(0)
-    expect(model.cost.output).toBe(0)
-    expect(model.capabilities.reasoning).toBe(false)
-    expect(model.capabilities.toolcall).toBe(false)
-  })
-
-  it("returns empty agent defaults when agent is not found in agents list", async () => {
-    const input = makeMockInput([], [], []) // empty agents
-    const hooks = await OpencodeAwarePlugin(input)
-    const ctx = { ...makeContext("ses_x"), agent: "nonexistent" }
-    const { agent } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, ctx))
-    expect(agent.name).toBe("nonexistent")
-    expect(agent.mode).toBe("")
-    expect(agent.builtIn).toBe(false)
-    expect(agent.description).toBeNull()
-  })
-
-  it("populates full model details when model is found in providers", async () => {
-    const pinnedAgent: MockAgent = {
-      name: "build",
-      mode: "build",
-      builtIn: true,
-      model: { modelID: "claude-sonnet", providerID: "anthropic" },
-    }
-    const input = makeMockInput([], [fullProvider], [pinnedAgent])
-    const hooks = await OpencodeAwarePlugin(input)
-    const { model } = JSON.parse(await hooks.tool!.get_agent_info.execute({}, makeContext("ses_x")))
-    expect(model.name).toBe("Claude Sonnet")
-    expect(model.status).toBe("available")
-    expect(model.cost.input).toBe(3)
-    expect(model.cost.output).toBe(15)
-    expect(model.cost.cache.read).toBe(0.3)
-    expect(model.cost.cache.write).toBe(3.75)
-    expect(model.capabilities.toolcall).toBe(true)
-    expect(model.capabilities.attachment).toBe(true)
-    expect(model.capabilities.input.image).toBe(true)
-    expect(model.capabilities.input.audio).toBe(false)
   })
 })
 
-describe("get_all_agents tool", () => {
-  const agentA: MockAgent = {
-    name: "build",
-    mode: "primary",
-    builtIn: true,
-    description: "Default build agent",
-    tools: { bash: true, read: true },
-    temperature: 1,
-    topP: 1,
-    maxSteps: 20,
-  }
-
-  const agentB: MockAgent = {
-    name: "review",
-    mode: "secondary",
-    builtIn: false,
-    description: "Code review agent",
-    model: { modelID: "gpt-4o", providerID: "openai" },
-  }
-
-  it("is registered on the plugin", async () => {
-    const hooks = await OpencodeAwarePlugin(makeMockInput())
-    expect(hooks.tool).toHaveProperty("get_all_agents")
+describe("v2 data helpers", () => {
+  it("resolves the database path through the v2 CLI", () => {
+    const path = resolveDbPath((command, args) => {
+      expect(command).toBe("opencode")
+      expect(args).toEqual(["debug", "paths", "db"])
+      return "/tmp/opencode.db\n"
+    })
+    expect(path).toBe("/tmp/opencode.db")
   })
 
-  it("returns valid JSON array", async () => {
-    const input = makeMockInput([], [], [agentA, agentB])
-    const hooks = await OpencodeAwarePlugin(input)
-    const raw = await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x"))
-    const result = JSON.parse(raw)
-    expect(Array.isArray(result)).toBe(true)
+  it("rejects an empty path from the CLI", () => {
+    expect(() => resolveDbPath(() => " \n")).toThrow("OpenCode returned an empty database path")
   })
 
-  it("returns all agents", async () => {
-    const input = makeMockInput([], [], [agentA, agentB])
-    const hooks = await OpencodeAwarePlugin(input)
-    const result = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
-    expect(result).toHaveLength(2)
-    expect(result.map((a: { name: string }) => a.name)).toEqual(["build", "review"])
+  it("resolves the most recent assistant model and ignores non-assistant messages", () => {
+    const messages = [
+      { id: "user", type: "user", text: "hello", time: { created: 0 } },
+      assistantMessage(1, 1, 0),
+    ] as SessionMessageInfo[]
+    expect(resolveActiveModel(messages)).toEqual({ modelID: "model-a", providerID: "provider-a" })
   })
 
-  it("each agent entry contains all expected keys", async () => {
-    const input = makeMockInput([], [], [agentA])
-    const hooks = await OpencodeAwarePlugin(input)
-    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
-    expect(agent).toHaveProperty("name")
-    expect(agent).toHaveProperty("mode")
-    expect(agent).toHaveProperty("builtIn")
-    expect(agent).toHaveProperty("description")
-    expect(agent).toHaveProperty("prompt")
-    expect(agent).toHaveProperty("temperature")
-    expect(agent).toHaveProperty("topP")
-    expect(agent).toHaveProperty("maxSteps")
-    expect(agent).toHaveProperty("tools")
-    expect(agent).toHaveProperty("permission")
-    expect(agent).toHaveProperty("model")
-  })
-
-  it("maps agent fields correctly", async () => {
-    const input = makeMockInput([], [], [agentA])
-    const hooks = await OpencodeAwarePlugin(input)
-    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
-    expect(agent.name).toBe("build")
-    expect(agent.mode).toBe("primary")
-    expect(agent.builtIn).toBe(true)
-    expect(agent.description).toBe("Default build agent")
-    expect(agent.temperature).toBe(1)
-    expect(agent.topP).toBe(1)
-    expect(agent.maxSteps).toBe(20)
-    expect(agent.tools).toEqual({ bash: true, read: true })
-    expect(agent.model).toBeNull()
-  })
-
-  it("includes model when agent has a pinned model", async () => {
-    const input = makeMockInput([], [], [agentB])
-    const hooks = await OpencodeAwarePlugin(input)
-    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
-    expect(agent.model).toEqual({ modelID: "gpt-4o", providerID: "openai" })
-  })
-
-  it("returns empty array when no agents are configured", async () => {
-    const input = makeMockInput([], [], [])
-    const hooks = await OpencodeAwarePlugin(input)
-    const result = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
-    expect(result).toEqual([])
-  })
-
-  it("defaults optional fields to null or empty objects when missing", async () => {
-    const minimal: MockAgent = { name: "minimal", mode: "primary", builtIn: false }
-    const input = makeMockInput([], [], [minimal])
-    const hooks = await OpencodeAwarePlugin(input)
-    const [agent] = JSON.parse(await hooks.tool!.get_all_agents.execute({}, makeContext("ses_x")))
-    expect(agent.description).toBeNull()
-    expect(agent.prompt).toBeNull()
-    expect(agent.temperature).toBeNull()
-    expect(agent.topP).toBeNull()
-    expect(agent.maxSteps).toBeNull()
-    expect(agent.tools).toEqual({})
-    expect(agent.permission).toEqual({})
-    expect(agent.model).toBeNull()
-  })
-})
-
-describe("get_opencode_docs tool", () => {
-  it("is registered on the plugin", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks.tool).toHaveProperty("get_opencode_docs")
-  })
-
-  it("returns a non-empty string", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const result = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_x"))
-    expect(typeof result).toBe("string")
-    expect((result as string).length).toBeGreaterThan(0)
-  })
-
-  it("output contains the sitemap source URL", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const result = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_x")) as string
-    expect(result).toContain("https://opencode.ai/sitemap.xml")
-  })
-
-  it("output contains markdown links to core doc pages", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const result = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_x")) as string
-    expect(result).toContain("[Intro](https://opencode.ai/docs/)")
-    expect(result).toContain("[Config](https://opencode.ai/docs/config)")
-    expect(result).toContain("[MCP Servers](https://opencode.ai/docs/mcp-servers)")
-    expect(result).toContain("[Agent Skills](https://opencode.ai/docs/skills)")
-    expect(result).toContain("[Plugins](https://opencode.ai/docs/plugins)")
-    expect(result).toContain("[GitHub: anomalyco/opencode](https://github.com/anomalyco/opencode)")
-  })
-
-  it("description mentions sitemap URL as freshness reference", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    expect(hooks.tool!.get_opencode_docs.description).toContain("https://opencode.ai/sitemap.xml")
-  })
-
-  it("execute takes no args and ignores context", async () => {
-    const hooks = await OpencodeAwarePlugin(mockInput)
-    const r1 = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_aaa"))
-    const r2 = await hooks.tool!.get_opencode_docs.execute({}, makeContext("ses_bbb"))
-    expect(r1).toBe(r2)
+  it("finds a model by provider and model ID", () => {
+    expect(lookupModel([model], "provider-a", "model-a")).toBe(model)
+    expect(lookupModel([model], "other", "model-a")).toBeUndefined()
   })
 })
