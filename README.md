@@ -31,9 +31,14 @@ Register the plugin in your project's or global `opencode.json`:
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-aware"] // npm package, or absolute path to dist/index.js
+  "plugin": ["opencode-aware@0.3.0"] // Pin the last release compatible with OpenCode v1
 }
 ```
+
+Version `0.3.0` is the last release compatible with OpenCode v1. Pin this version
+if you are using OpenCode v1; future releases may target the incompatible v2
+plugin API. OpenCode v2 uses the `plugins` configuration key and requires a
+version of this plugin built for v2.
 
 More information: https://opencode.ai/docs/plugins/
 
