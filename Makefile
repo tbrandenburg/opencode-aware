@@ -22,7 +22,7 @@ test:
 	cd $(PLUGIN_DIR) && bun test src/index.test.ts
 
 test-e2e: build
-	cd $(PLUGIN_DIR) && bun test src/e2e.test.ts --timeout 90000
+	cd $(PLUGIN_DIR) && bun test src/e2e.test.ts --timeout 90000 --max-concurrency 1
 
 lint: typecheck
 
